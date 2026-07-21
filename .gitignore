@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.swp
+.~*
+~*
+.dcc-mcp/
+pre-ppt/Group 3-Implementation of CS2.pptx
+pre-ppt/Group 7- Zombie Apocalypse City.pptx
+pre-ppt/G4 smoke flow Pre-production presentation (final).pptx
+pre-ppt/Group6-Orbit Loop City.pptx
+crystal_cavern/renders/final_v4/
+crystal_cavern/renders/final_v5/
+crystal_cavern/renders/final_v7/
+crystal_cavern/renders/final_v9/
+crystal_cavern/renders/final_v11/
+crystal_cavern/renders/amethyst_cave_v2/
+crystal_cavern/renders/test_*/
+crystal_cavern/renders/citrine_cave/
+crystal_cavern/renders/fluorite_cave/
+crystal_cavern/renders/aquamarine_cave/
+crystal_cavern/renders/ruby_cave/
+crystal_cavern/renders/obsidian_cave/
+crystal_cavern/renders/amethyst_cave/
+crystal_cavern/ppt_slides/
