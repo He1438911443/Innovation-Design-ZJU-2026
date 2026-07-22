@@ -6,10 +6,16 @@ Provides a tabbed user interface for controlling all crystal generation,
 lighting, and rendering parameters.
 """
 
+import os
+
 import maya.cmds as cmds
 
 WINDOW_NAME = "crystalCavernUI_v2"
 TAB_LAYOUT = "cc_tabs"
+
+# Directory of this module (used to put the project on sys.path regardless
+# of which machine / checkout the panel runs from).
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +30,7 @@ def create_ui():
     window = cmds.window(
         WINDOW_NAME,
         title="Crystal Cavern v2",
-        widthHeight=(380, 560),
+        widthHeight=(400, 600),
         sizeable=True,
     )
 
@@ -52,7 +58,10 @@ def create_ui():
     # ── Tab 3: Lighting ─────────────────────────────────────────────────
     _build_lighting_tab(tabs)
 
-    # ── Tab 4: Render ───────────────────────────────────────────────────
+    # ── Tab 4: Camera / Animation ───────────────────────────────────────
+    _build_camera_tab(tabs)
+
+    # ── Tab 5: Render ───────────────────────────────────────────────────
     _build_render_tab(tabs)
 
     cmds.setParent(root)
@@ -170,6 +179,64 @@ def _build_lighting_tab(tabs):
     cmds.tabLayout(tabs, edit=True, tabLabel=(child, "Lighting"))
 
 
+def _build_camera_tab(tabs):
+    """Populate the Camera / Animation tab.
+
+    Exposes the fly-through and growth-animation knobs that
+    ``final_scene.build()`` now accepts, so the immersive feel can be tuned
+    without editing code.
+    """
+    child = cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
+    cmds.floatSliderGrp(
+        "cam_focal",
+        label="Focal Length (mm)",
+        field=True, minValue=18.0, maxValue=50.0, value=24.0, step=1.0,
+    )
+    cmds.floatSliderGrp(
+        "cam_fly_y",
+        label="Fly Eye Height",
+        field=True, minValue=1.0, maxValue=8.0, value=3.0, step=0.5,
+    )
+    cmds.floatSliderGrp(
+        "cam_look_radius",
+        label="Look Attraction Radius",
+        field=True, minValue=5.0, maxValue=35.0, value=18.0, step=1.0,
+    )
+    cmds.separator(height=6, style="in")
+    cmds.text(label="  Crystal Growth Animation", font="smallBoldLabelFont",
+              height=18, align="left")
+    cmds.intSliderGrp(
+        "growth_stagger",
+        label="Stagger Window (frames)",
+        field=True, minValue=100, maxValue=600, value=400, step=20,
+    )
+    cmds.intSliderGrp(
+        "growth_duration",
+        label="Growth Duration (frames)",
+        field=True, minValue=300, maxValue=800, value=560, step=20,
+    )
+    cmds.separator(height=6, style="in")
+    cmds.button(
+        label="Frame 1 (preview start)",
+        command=lambda *_: _goto_frame(1),
+    )
+    cmds.button(
+        label="Frame 960 (preview end)",
+        command=lambda *_: _goto_frame(960),
+    )
+    cmds.setParent("..")
+    cmds.tabLayout(tabs, edit=True, tabLabel=(child, "Cam/Anim"))
+
+
+def _goto_frame(frame):
+    """Jump the timeline to *frame* and stop playback (preview helper)."""
+    try:
+        cmds.currentTime(frame, edit=True)
+        cmds.play(state=False)
+    except (RuntimeError, ValueError):
+        pass
+
+
 def _build_render_tab(tabs):
     """Populate the Render tab."""
     child = cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
@@ -241,22 +308,30 @@ def generate_from_ui():
     dust_count = cmds.intSliderGrp("light_dust", query=True, value=True)
     crystal_lights = cmds.intSliderGrp("light_crystal_lights", query=True, value=True)
 
+    # Camera / animation sliders (guarded: tab absent on older panels)
+    cam_focal = _qry_float("cam_focal", 24.0)
+    cam_fly_y = _qry_float("cam_fly_y", 3.0)
+    cam_look_radius = _qry_float("cam_look_radius", 18.0)
+    growth_stagger = _qry_int("growth_stagger", 400)
+    growth_duration = _qry_int("growth_duration", 560)
+
     render_width = cmds.intSliderGrp("render_width", query=True, value=True)
     render_height = cmds.intSliderGrp("render_height", query=True, value=True)
     render_aa = cmds.intSliderGrp("render_aa", query=True, value=True)
 
     # ── Log ───────────────────────────────────────────────────────────
-    print("=" * 55)
+    print("=" * 60)
     print("  CRYSTAL CAVERN v10 — One-Click Generation")
     print("  seed={0}  density={1}  fog={2}  roughness={3}".format(
         terrain_seed, crystal_density, fog_density, terrain_roughness))
-    print("=" * 55)
+    print("  cam: {0}mm  fly_y={1}  look_r={2}  growth {3}/{4}f".format(
+        cam_focal, cam_fly_y, cam_look_radius, growth_stagger, growth_duration))
+    print("=" * 60)
 
-    # ── Ensure project is on path ─────────────────────────────────────
-    import sys as _s, os as _o
-    _dir = "/Users/xixi/大学/未来创新设计/crystal_cavern"
-    if _dir not in _s.path:
-        _s.path.insert(0, _dir)
+    # ── Ensure project is on path (machine-independent, no hardcoded dir) ──
+    import sys as _s
+    if _MODULE_DIR not in _s.path:
+        _s.path.insert(0, _MODULE_DIR)
 
     try:
         # Use final_scene (v10 all-in-one build)
@@ -268,9 +343,10 @@ def generate_from_ui():
         for obj in ['crystalCavern_v9','crystalCavern_v8','crystalCavern_v10',
                     'CCV9_crystals','CCV9_dust','CCV9_cave_shell','CCV9_terrain',
                     'cave_terrain','cave_enclosure','crystal_group','dust_particles',
-                    'cave_fog','stalactites','stalagmites']:
+                    'cave_fog','stalactites','stalagmites',
+                    'CCV9_cam_lookat','CCV9_cam_aimConstraint']:
             if cmds.objExists(obj): cmds.delete(obj)
-        for prefix in ['CCV9_','CCV8_','fly_cam','render_cam']:
+        for prefix in ['CCV9_','CCV8_','CCV9_cam','fly_cam','render_cam']:
             for n in (cmds.ls(prefix+'*') or []):
                 try: cmds.delete(n)
                 except: pass
@@ -283,25 +359,57 @@ def generate_from_ui():
             seed=terrain_seed,
             density=mapped_density,
             fog_density=fog_density,
-            render=False  # separate render button does this
+            render=False,  # separate render button does this
+            camera_focal=cam_focal,
+            fly_y=cam_fly_y,
+            look_radius=cam_look_radius,
+            growth_stagger=growth_stagger,
+            growth_duration=growth_duration,
         )
 
         print("\n  Scene built! Camera: {0}".format(cam))
-        print("  Click 'Render Still' to render, or")
-        print("  Arnold > Open Render View > Start Render")
+        print("  Fly-through 1->960; click 'Render Still' or play the timeline.")
 
-        cmds.confirmDialog(
-            title="Generation Complete",
-            message="Scene built successfully.\n{0} crystals generated.\nClick 'Render Still' to render.".format(
-                mapped_density),
-            button=["OK"],
-            defaultButton="OK",
-        )
+        # Jump to frame 1 and look through the new camera so the user sees
+        # the start of the fly-through immediately, without a blocking dialog.
+        _look_through(cam)
 
     except Exception as e:
         cmds.warning("Generation failed: {0}".format(e))
         import traceback
         traceback.print_exc()
+
+
+def _look_through(cam):
+    """Switch the active model panel to the fly camera and go to frame 1."""
+    try:
+        cmds.currentTime(1, edit=True)
+        cmds.play(state=False)
+        panel = cmds.getPanel(withFocus=True)
+        if panel and cmds.getPanel(typeOf=panel) == "modelPanel":
+            cmds.modelPanel(panel, edit=True, camera=cam)
+    except (RuntimeError, ValueError):
+        pass
+
+
+def _qry_float(name, default):
+    """Query a floatSliderGrp by name, returning *default* if it is absent."""
+    try:
+        if cmds.floatSliderGrp(name, exists=True):
+            return cmds.floatSliderGrp(name, query=True, value=True)
+    except (RuntimeError, ValueError):
+        pass
+    return float(default)
+
+
+def _qry_int(name, default):
+    """Query an intSliderGrp by name, returning *default* if it is absent."""
+    try:
+        if cmds.intSliderGrp(name, exists=True):
+            return cmds.intSliderGrp(name, query=True, value=True)
+    except (RuntimeError, ValueError):
+        pass
+    return int(default)
 
 
 def reset_scene():
@@ -316,6 +424,16 @@ def reset_scene():
     )
     if confirmed != "Reset":
         return
+    # Drop leftover roots / lights before opening a fresh scene so the next
+    # Generate does not inherit stale geometry or orphaned lights.
+    for prefix in ['crystalCavern_v', 'CCV9_', 'CCV8_', 'fly_cam', 'render_cam',
+                   'cave_terrain', 'cave_enclosure', 'crystal_group',
+                   'dust_particles', 'cave_fog', 'stalactites', 'stalagmites']:
+        for n in (cmds.ls(prefix + '*') or []):
+            try:
+                cmds.delete(n)
+            except (RuntimeError, ValueError):
+                pass
     cmds.file(new=True, force=True)
 
 

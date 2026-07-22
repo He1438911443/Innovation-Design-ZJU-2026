@@ -131,7 +131,7 @@ def _aim_align(obj, nx, ny, nz):
 def _crystal_cluster(pos, normal, scale, shader, index, parent, rng):
     """Hexagonal prism main crystal + pointed tip + 3D spherical L-system branches.
 
-    Returns (cluster_group, light_anchor_position).
+    Returns (cluster_group, light_anchor_position, crystal_height).
     """
     nx, ny, nz = normal[0], normal[1], normal[2]
     nl = math.sqrt(nx * nx + ny * ny + nz * nz)
@@ -230,7 +230,7 @@ def _crystal_cluster(pos, normal, scale, shader, index, parent, rng):
     light_anchor = (pos[0] + nx * height * 0.55,
                     pos[1] + ny * height * 0.55,
                     pos[2] + nz * height * 0.55)
-    return cluster, light_anchor
+    return cluster, light_anchor, height
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -300,13 +300,18 @@ def _build_diamond_square_terrain(size, seed, roughness, parent):
 
 
 def _build_cave_shell(parent):
-    """Inward-facing spherical shell for enclosed cave ceiling + walls."""
+    """Inward-facing spherical shell for enclosed cave ceiling + walls.
+
+    Radius tuned (30→22) so walls sit 6-14m from the fly-through camera and
+    crystal silhouettes press against them — the "tunnel surrounded by
+    crystals" feel rather than an open cathedral hall.
+    """
     shell = cmds.polySphere(
-        name="CCV9_cave_shell", radius=30,
+        name="CCV9_cave_shell", radius=22,
         subdivisionsX=52, subdivisionsY=32,
     )[0]
     cmds.scale(1.0, 0.55, 1.0, shell)
-    cmds.move(0, 6, 0, shell)
+    cmds.move(0, 5, 0, shell)
     cmds.polyNormal(shell, normalMode=0, userNormalMode=0, ch=False)
     # Invert normals so interior faces inside
     cmds.polyNormal(shell, normalMode=3, userNormalMode=0, ch=1)
@@ -339,6 +344,168 @@ def _build_stalactites(parent, ceiling_mesh, rng):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  IMMERSIVE FLY-THROUGH CAMERA
+# ═══════════════════════════════════════════════════════════════════════
+
+def _weighted_look_target(cam_pos, crystals, fallback, radius=18.0):
+    """Weighted centre of nearby tall crystals for the camera to gaze at.
+
+    `crystals` is a list of (position, color, height) tuples.  Weights are
+    proportional to height and inversely proportional to distance, so the
+    tallest *and* nearest crystals dominate framing; the gaze point is
+    biased upward (height*0.2) toward the visually rich upper third of the
+    crystal.  Falls back to *fallback* when nothing is in range.
+    """
+    wx = wy = wz = 0.0
+    total = 0.0
+    for pos, _color, height in crystals:
+        dx = cam_pos[0] - pos[0]
+        dy = cam_pos[1] - pos[1]
+        dz = cam_pos[2] - pos[2]
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d < radius:
+            w = height / max(d, 0.5)
+            wx += pos[0] * w
+            wy += (pos[1] + height * 0.2) * w
+            wz += pos[2] * w
+            total += w
+    if total > 0.0:
+        return (wx / total, wy / total, wz / total)
+    return fallback
+
+
+def _compute_camera_keyframes(top_crystals, centre, fly_y, look_radius):
+    """Build an immersive 9-keyframe fly-through path.
+
+    Layout: low ceiling-hugging entrance → spiral close passes past the 6
+    tallest crystals (camera wraps ~200° around the cluster) → rising
+    pull-back exit.  Camera eye height stays around *fly_y*+ to mid-crystal.
+    Each keyframe carries a distinct lookat computed from the actual
+    crystals, so the camera is forced to turn its head throughout.
+    """
+    middle_n = min(7, max(len(top_crystals), 1))
+    middle = top_crystals[:middle_n]
+
+    keys = []
+
+    # Frame 1 — entrance, low ceiling, gazing into the cave
+    start_pos = (16.0, fly_y + 2.0, 18.0)
+    start_look = _weighted_look_target(start_pos, top_crystals, centre, look_radius)
+    keys.append((1, start_pos, start_look))
+
+    # Frames 120–720 — spiral through the 7 tallest crystals
+    frame_step = 600.0 / max(middle_n, 1)
+    for i in range(middle_n):
+        cpos, _color, cheight = middle[i]
+        f = int(120 + (i + 1) * frame_step)
+
+        # Camera wraps ~200° around the cluster over the sequence
+        t = i / max(middle_n - 1, 1)
+        angle = math.pi / 5 + t * 1.1 * math.pi
+        dist = 3.5  # close pass — surrounded by crystals
+
+        cam_pos = (
+            cpos[0] + math.cos(angle) * dist,
+            max(fly_y, cpos[1] * 0.5 + fly_y + cheight * 0.15),
+            cpos[2] + math.sin(angle) * dist,
+        )
+        look_target = _weighted_look_target(cam_pos, top_crystals, centre, look_radius)
+        keys.append((f, cam_pos, look_target))
+
+    # Frame 960 — rising pull-back establishing shot
+    end_pos = (12.0, fly_y + 4.0, 5.0)
+    end_look = _weighted_look_target(end_pos, top_crystals, centre, look_radius)
+    keys.append((960, end_pos, end_look))
+
+    keys.sort(key=lambda k: k[0])
+    return keys
+
+
+def _build_immersive_camera(anchors, root, rng, focal=24.0, fly_y=3.0,
+                            look_radius=18.0):
+    """Build the immersive fly-through camera with a persistent travelling lookat.
+
+    Unlike the earlier rig, the aimConstraint is kept alive for the full
+    animation and the lookat locator is keyframed alongside the camera, so
+    the camera continuously turns toward nearby tall crystals instead of
+    flying in a fixed orientation.
+
+    Args:
+        anchors: list of (position, color, height) tuples from the crystal phase.
+        root:    scene root transform for parenting.
+        rng:     random.Random (kept for parity / future jitter).
+        focal:   focal length in mm (24 = wide, immersive).
+        fly_y:   base eye height through the crystal forest.
+        look_radius: radius within which crystals attract the gaze.
+
+    Returns:
+        (camera_transform, lookat_locator) names.
+    """
+    # Camera + lookat locator
+    cam = cmds.camera(name="CCV9_render_cam", focalLength=focal)[0]
+    target = cmds.spaceLocator(name="CCV9_cam_lookat")[0]
+    cmds.hide(target)
+    cmds.move(18, fly_y + 2, 20, cam)
+    cmds.move(0, fly_y + 1, 0, target)
+
+    # Persistent aimConstraint — the core fix. Do NOT delete it.
+    cmds.aimConstraint(target, cam,
+                       aimVector=(0, 0, -1),
+                       upVector=(0, 1, 0),
+                       worldUpType="vector",
+                       worldUpVector=(0, 1, 0),
+                       name="CCV9_cam_aimConstraint")
+
+    # Depth of field (kept from the original rig)
+    _safe_attr(cam + "Shape", "depthOfField", 1)
+    _safe_attr(cam + "Shape", "focusDistance", 12)
+    _safe_attr(cam + "Shape", "fStop", 3.2)
+    try:
+        cmds.setAttr(cam + "Shape.ai_exposure", 3.0)
+    except (RuntimeError, ValueError):
+        pass
+
+    cmds.parent(cam, root)
+    cmds.parent(target, root)
+
+    # Candidate lookat crystals: tallest 12
+    sorted_anchors = sorted(anchors, key=lambda a: a[2], reverse=True)
+    top_crystals = sorted_anchors[:min(12, len(sorted_anchors))]
+
+    # Cluster centre, boosted above the floor so we never stare at the ground
+    if top_crystals:
+        cx = sum(a[0][0] for a in top_crystals) / len(top_crystals)
+        cy = sum(a[0][1] for a in top_crystals) / len(top_crystals) + 1.5
+        cz = sum(a[0][2] for a in top_crystals) / len(top_crystals)
+        centre = (cx, cy, cz)
+    else:
+        centre = (0.0, fly_y + 1.0, 0.0)
+
+    keyframes = _compute_camera_keyframes(top_crystals, centre, fly_y, look_radius)
+
+    # Keyframe BOTH the camera and the lookat locator
+    for frame, cam_pos, look_pos in keyframes:
+        cmds.setKeyframe(cam, attribute="translateX", value=cam_pos[0], time=frame)
+        cmds.setKeyframe(cam, attribute="translateY", value=cam_pos[1], time=frame)
+        cmds.setKeyframe(cam, attribute="translateZ", value=cam_pos[2], time=frame)
+        cmds.setKeyframe(target, attribute="translateX", value=look_pos[0], time=frame)
+        cmds.setKeyframe(target, attribute="translateY", value=look_pos[1], time=frame)
+        cmds.setKeyframe(target, attribute="translateZ", value=look_pos[2], time=frame)
+
+    try:
+        cmds.select(cam)
+        cmds.keyTangent(inTangentType="spline", outTangentType="spline")
+        cmds.select(target)
+        cmds.keyTangent(inTangentType="spline", outTangentType="spline")
+    except (RuntimeError, ValueError):
+        pass
+
+    cmds.playbackOptions(min=1, max=960, animationStartTime=1,
+                         animationEndTime=960)
+    return cam, target
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  POISSON-DISC SEED DISTRIBUTION
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -365,8 +532,18 @@ def _poisson_sample_3d(points_with_normals, target, min_dist, rng):
 #  MAIN BUILD
 # ═══════════════════════════════════════════════════════════════════════
 
-def build(seed=20260721, density=56, fog_density=0.008, render=True):
-    """Build complete cavern + Arnold render. Returns render camera name."""
+def build(seed=20260721, density=56, fog_density=0.008, render=True,
+          camera_focal=24, fly_y=3.0, look_radius=18.0,
+          growth_stagger=400, growth_duration=560):
+    """Build complete cavern + Arnold render. Returns render camera name.
+
+    Camera/animation knobs (all optional, backward-compatible defaults):
+        camera_focal:    fly-through focal length in mm (24 = immersive wide).
+        fly_y:           target eye height through the crystal forest (m).
+        look_radius:     radius (m) within which crystals attract the gaze.
+        growth_stagger:  window over which crystals begin growing (frames).
+        growth_duration: per-crystal growth length (frames).
+    """
     rng = random.Random(seed)
 
     # ── Cleanup ───────────────────────────────────────────────────────
@@ -375,11 +552,18 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True):
         if cmds.objExists(old_root):
             cmds.delete(old_root)
     for prefix in ["CCV9_", "CCV8_", "CCV7_", "CCV6_", "CCV5_",
-                   "crystalCavern", "cave_terrain", "cave_enclosure",
-                   "crystal_group", "dust_particles", "cave_fog",
-                   "stalactites", "stalagmites"]:
+                   "CCV9_cam", "crystalCavern", "cave_terrain",
+                   "cave_enclosure", "crystal_group", "dust_particles",
+                   "cave_fog", "stalactites", "stalagmites"]:
         for name in (cmds.ls(prefix + "*") or []):
             try: cmds.delete(name)
+            except: pass
+
+    # ── Clean orphaned camera anim curves from previous runs ──
+    for curve in (cmds.ls(type="animCurve") or []):
+        cname = str(curve)
+        if "CCV9_render_cam" in cname or "CCV9_cam_lookat" in cname:
+            try: cmds.delete(curve)
             except: pass
 
     # ── Arnold plugin ─────────────────────────────────────────────────
@@ -466,9 +650,9 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True):
     for i, (pos, normal) in enumerate(seeds):
         scale = rng.uniform(0.72, 1.6) * (1.6 if i < 12 else 1.0)
         shader = gems[i % len(gems)]
-        cluster, anchor = _crystal_cluster(pos, normal, scale, shader, i,
-                                           xtal_root, rng)
-        anchors.append((anchor, gem_defs[i % len(gem_defs)][0]))
+        cluster, anchor, crystal_h = _crystal_cluster(pos, normal, scale,
+                                                       shader, i, xtal_root, rng)
+        anchors.append((anchor, gem_defs[i % len(gem_defs)][0], crystal_h))
         if (i + 1) % 15 == 0:
             print("  crystals: {}/{}".format(i + 1, len(seeds)))
     print("  crystals: {}/{} (hexagonal prisms, L-system branches)".format(
@@ -477,8 +661,8 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True):
     # ── Growth animation: scale crystals 0→1 over frames 0-960 ──────
     children = cmds.listRelatives(xtal_root, children=True, type="transform") or []
     for idx, child in enumerate(children):
-        start_f = int((idx / len(children)) * 200)
-        end_f = start_f + 520
+        start_f = int((idx / max(len(children), 1)) * growth_stagger)
+        end_f = start_f + growth_duration
         try:
             for axis in ('X', 'Y', 'Z'):
                 cmds.setKeyframe(child, attribute='scale' + axis,
@@ -489,11 +673,11 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True):
             pass
     try:
         cmds.select(children)
-        cmds.keyTangent(inTangentType='linear', outTangentType='spline')
+        cmds.keyTangent(inTangentType='spline', outTangentType='spline')
     except (RuntimeError, ValueError):
         pass
-    print("  growth animation: {} crystals staggered over 720 frames".format(
-        len(children)))
+    print("  growth animation: {} crystals, stagger {}f / duration {}f (ease-in-out)".format(
+        len(children), growth_stagger, growth_duration))
 
     # ── 3-layer lighting ─────────────────────────────────────────────
     cmds.progressWindow(edit=True, progress=6, status="Setting up lights + fog + dust...")
@@ -556,38 +740,14 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True):
         _assign(mote, dust_mat)
         cmds.parent(mote, dust_grp)
 
-    # ── Camera with DOF ─────────────────────────────────────────────
+    # ── Immersive fly-through camera (24mm, travelling lookat) ────────
     cmds.progressWindow(edit=True, progress=7, status="Setting up camera + animation...")
-    cam = cmds.camera(name="CCV9_render_cam", focalLength=35)[0]
-    cmds.move(6.0, 1.5, 12.0, cam)
-    target = cmds.spaceLocator(name="CCV9_cam_target")[0]
-    cmds.move(0, -1.0, -2.0, target)
-    ac = cmds.aimConstraint(target, cam, aimVector=(0, 0, -1),
-                              upVector=(0, 1, 0), worldUpType="vector",
-                              worldUpVector=(0, 1, 0))
-    cmds.delete(ac)
-    try: cmds.delete(target)
-    except: pass
-    _safe_attr(cam + "Shape", "depthOfField", 1)
-    _safe_attr(cam + "Shape", "focusDistance", 22)
-    _safe_attr(cam + "Shape", "fStop", 3.2)
-    # Arnold camera exposure boost — compensates for dark cave interior
-    try: cmds.setAttr(cam + "Shape.ai_exposure", 3.0)
-    except: pass
-    cmds.parent(cam, root)
-
-    # 960-frame interior fly-through
-    for frame, tx, ty, tz in [
-        (1, 15, 3.5, 22), (180, 8, 1.0, 12),
-        (360, -3, -0.5, 4), (540, -11, 2.0, -7),
-        (720, -3, 1.5, -14), (960, 8, 4.0, 8),
-    ]:
-        cmds.setKeyframe(cam + ".translateX", value=tx, time=frame)
-        cmds.setKeyframe(cam + ".translateY", value=ty, time=frame)
-        cmds.setKeyframe(cam + ".translateZ", value=tz, time=frame)
-    cmds.playbackOptions(min=1, max=960, animationStartTime=1,
-                          animationEndTime=960)
-    print("  camera: 24mm, DOF f/3.2, 960-frame fly-through")
+    cam, _lookat = _build_immersive_camera(anchors, root, rng,
+                                           focal=camera_focal,
+                                           fly_y=fly_y,
+                                           look_radius=look_radius)
+    print("  camera: {}mm, DOF f/3.2, 960-frame immersive fly-through "
+          "(travelling lookat)".format(camera_focal))
 
     # ── Render settings ─────────────────────────────────────────────
     cmds.setAttr("defaultRenderGlobals.currentRenderer", "arnold",
