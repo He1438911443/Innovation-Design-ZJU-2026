@@ -183,3 +183,35 @@ How do I create dramatic cave lighting in Maya using Python cmds? I want:
 dark ambient, point lights with colored glow near crystals, volumetric fog, 
 and a key light simulating light from outside the cave.
 ```
+
+---
+
+# 附录: 现场答辩补充脚本（中文）
+
+以下两段为现场答辩阶段的补充口头内容，分别覆盖 GUI 交互（25 分关键点，约 1 分钟）与 L-System 理论讲解（约 30 秒）。配合答辩 PPT v3 对应页面使用。
+
+---
+
+## Slide X: GUI Design (新增)
+
+**对应 PPT**: Slide 9「交互 GUI — Maya 内嵌可视化窗口」
+
+**Say**:
+"我的 GUI 遵循 Maya 标准布局层级——window 下面 tabLayout，每个 tab 里 columnLayout 组织控件。4 个标签页把参数按 Terrain / Crystals / Lighting / Render 分组——这样做是因为如果把 16 个控件堆在一个页面，会非常拥挤。这也是张老师今天课上强调的 tabLayout 最佳实践。"
+
+"每个控件都有安全范围——比如 Seed 1 到 99999，Density 0.5 到 4.0——防止用户输入崩溃值。默认参数就能生成不错的效果，因为用户是'超级懒的'，他们只会直接按 Generate。"
+
+"生成过程中有 progressWindow 显示 8 个阶段进度条，用户知道系统还在运行，不会以为卡死了。"
+
+---
+
+## Slide Y: L-System 理论 (新增)
+
+**对应 PPT**: Slide 4「L-System 晶体生长」/ Slide 7「L-system 分支」
+
+**Say**:
+"晶体生长算法的基础是 L-System，由生物学家 Lindenmayer 在 1968 年提出。核心思想很简单——从字符串 'F' 出发，反复应用重写规则如 'F → F[+F][-F]'，经过多轮迭代后得到极其复杂的形态。这就是'自相似性'——从远处看是一棵大树，从近处看每一根枝条又是小树的形状。"
+
+"我在三维空间中实现了这个思想——每个主晶在球面上随机方位角和仰角，生成 3-8 根侧生晶体。迭代次数、分支角度和长度都是可控参数。"
+
+---
