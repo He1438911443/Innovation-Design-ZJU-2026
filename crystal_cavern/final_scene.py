@@ -478,7 +478,7 @@ def _build_immersive_camera(anchors, root, rng, focal=24.0, fly_y=3.0,
     # Arnold exposure — lowered: with brighter key/rim and denser fog the
     # cave no longer needs a heavy +3.0 lift, which had washed out contrast.
     try:
-        cmds.setAttr(cam + "Shape.ai_exposure", 6.0)
+        cmds.setAttr(cam + "Shape.ai_exposure", 3.0)
     except (RuntimeError, ValueError):
         pass
 
@@ -702,19 +702,19 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
     dome_lt = cmds.shadingNode("aiSkyDomeLight", asLight=True,
                                 name="CCV9_ambient")
     _safe_attr(dome_lt, "color", (0.04, 0.025, 0.06), "color")
-    _safe_attr(dome_lt, "intensity", 1.0)
+    _safe_attr(dome_lt, "intensity", 0.50)
 
     # Key light: warm golden beam from the cave entrance, steep and deep
     key = cmds.directionalLight(name="CCV9_entrance_key")
     _safe_attr(key, "color", (1.0, 0.75, 0.40), "color")
-    _safe_attr(key, "intensity", 180)
+    _safe_attr(key, "intensity", 250)
     cmds.rotate(-55, -35, 0, key)
     cmds.move(20, 18, 25, key)
 
     # Rim light: cool blue back-glow outlining the crystals
     rim = cmds.directionalLight(name="CCV9_blue_rim")
     _safe_attr(rim, "color", (0.15, 0.30, 1.0), "color")
-    _safe_attr(rim, "intensity", 40)
+    _safe_attr(rim, "intensity", 50)
     cmds.rotate(25, 145, 0, rim)
 
     # Crystal glow: brighter point lights with linear decay so the glow stays
