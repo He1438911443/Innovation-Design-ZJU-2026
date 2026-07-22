@@ -6,7 +6,7 @@ Merges the best ideas from both iteration streams:
   v7:      hexagonal prism crystals (sx=6), L-system 3D spherical branching,
            12% root embedding, aiNoise cloudy internal SSS texture,
            Diamond-Square terrain, stalactites/stalagmites, growth animation,
-           1920×1080 EXR + Z AOV, 960-frame fly-through, 10 gem IOR variants.
+           1920×1080 EXR + Z AOV, 2400-frame fly-through, 10 gem IOR variants.
 
 Paste into Maya Script Editor Python tab → Ctrl+Enter.
 """
@@ -49,15 +49,15 @@ def _material(name, color, transmission=0.0, emission=0.0, roughness=0.5,
     _safe_attr(shader, "specular", 0.9 if transmission else 0.5)
     _safe_attr(shader, "specularIOR", ior)
     _safe_attr(shader, "transmissionWeight", transmission)
-    _safe_attr(shader, "transmissionDepth", 3.0 if transmission > 0 else 1.0)
+    _safe_attr(shader, "transmissionDepth", 5.0 if transmission > 0 else 1.0)
     _safe_attr(shader, "transmissionColor",
                tuple(c * 0.55 for c in color), "color")
-    _safe_attr(shader, "subsurfaceWeight", 0.75 if transmission else 0.0)
+    _safe_attr(shader, "subsurfaceWeight", 0.95 if transmission else 0.0)
     sc = subsurface_color or color
     _safe_attr(shader, "subsurfaceColor", sc, "color")
-    _safe_attr(shader, "subsurfaceScale", 2.8 if transmission else 0)
+    _safe_attr(shader, "subsurfaceScale", 4.0 if transmission else 0)
     _safe_attr(shader, "subsurfaceRadius",
-               (0.45, 0.45, 0.45) if transmission else (0, 0, 0), "color")
+               (0.8, 0.8, 0.8) if transmission else (0, 0, 0), "color")
     _safe_attr(shader, "coatWeight", 0.28 if transmission else 0.0)
     _safe_attr(shader, "coatRoughness", 0.04)
     _safe_attr(shader, "coatIOR", 1.38)
@@ -287,10 +287,10 @@ def _build_diamond_square_terrain(size, seed, roughness, parent):
             cx = (i / subdivs - 0.5) * size
             cz = (j / subdivs - 0.5) * size
             dist = math.sqrt(cx * cx + cz * cz) / (size * 0.5)
-            # Cave bowl shape
+            # Cave bowl shape — deep bowl for a sense of cave depth
             cy = (hm[i][j] * (1.0 - dist)
-                  - 16 * dist ** 1.5
-                  + math.sin(cx * 0.35) * math.cos(cz * 0.35) * 2.5)
+                  - 22 * dist ** 1.5
+                  + math.sin(cx * 0.4) * math.cos(cz * 0.4) * 3.0)
             vtx = "{}.vtx[{}]".format(terrain, i * n + j)
             cmds.move(cx, cy, cz, vtx, relative=False, ws=True)
     cmds.polyNormal(terrain, normalMode=2, userNormalMode=0, ch=1)
@@ -302,16 +302,16 @@ def _build_diamond_square_terrain(size, seed, roughness, parent):
 def _build_cave_shell(parent):
     """Inward-facing spherical shell for enclosed cave ceiling + walls.
 
-    Radius tuned (30→22) so walls sit 6-14m from the fly-through camera and
-    crystal silhouettes press against them — the "tunnel surrounded by
-    crystals" feel rather than an open cathedral hall.
+    Wide + low dome (radius 28, Y scale 0.30, centred at Y=10) so the cave
+    reads as a spacious cavern rather than a tight tunnel — crystals occupy
+    a fraction of the frame, leaving room for fog, light shafts and depth.
     """
     shell = cmds.polySphere(
-        name="CCV9_cave_shell", radius=22,
+        name="CCV9_cave_shell", radius=28,
         subdivisionsX=52, subdivisionsY=32,
     )[0]
-    cmds.scale(1.0, 0.55, 1.0, shell)
-    cmds.move(0, 5, 0, shell)
+    cmds.scale(1.0, 0.30, 1.0, shell)
+    cmds.move(0, 10, 0, shell)
     cmds.polyNormal(shell, normalMode=0, userNormalMode=0, ch=False)
     # Invert normals so interior faces inside
     cmds.polyNormal(shell, normalMode=3, userNormalMode=0, ch=1)
@@ -375,47 +375,62 @@ def _weighted_look_target(cam_pos, crystals, fallback, radius=18.0):
 
 
 def _compute_camera_keyframes(top_crystals, centre, fly_y, look_radius):
-    """Build an immersive 9-keyframe fly-through path.
+    """Build an immersive 30-keyframe fly-through over 2400 frames (~100s @ 24fps).
 
-    Layout: low ceiling-hugging entrance → spiral close passes past the 6
+    Layout: low ceiling-hugging entrance → spiral close passes past the
     tallest crystals (camera wraps ~200° around the cluster) → rising
     pull-back exit.  Camera eye height stays around *fly_y*+ to mid-crystal.
     Each keyframe carries a distinct lookat computed from the actual
     crystals, so the camera is forced to turn its head throughout.
     """
+    total_frames = 2400
+    num_keyframes = 30
+
     middle_n = min(7, max(len(top_crystals), 1))
     middle = top_crystals[:middle_n]
 
-    keys = []
-
-    # Frame 1 — entrance, low ceiling, gazing into the cave
     start_pos = (16.0, fly_y + 2.0, 18.0)
-    start_look = _weighted_look_target(start_pos, top_crystals, centre, look_radius)
-    keys.append((1, start_pos, start_look))
+    end_pos = (12.0, fly_y + 4.0, 5.0)
 
-    # Frames 120–720 — spiral through the 7 tallest crystals
-    frame_step = 600.0 / max(middle_n, 1)
-    for i in range(middle_n):
-        cpos, _color, cheight = middle[i]
-        f = int(120 + (i + 1) * frame_step)
+    # Dense spiral samples between entrance and exit
+    n_spiral = num_keyframes - 2
+    spiral_samples = []
+    for i in range(n_spiral):
+        t = i / max(n_spiral - 1, 1)
+        # Smooth blend across the tallest-crystal orbit anchors
+        fi = t * (middle_n - 1)
+        i0 = int(fi)
+        i1 = min(i0 + 1, middle_n - 1)
+        blend = fi - i0
+        cpos0, _, cheight0 = middle[i0]
+        cpos1, _, cheight1 = middle[i1]
+        cpos = (
+            cpos0[0] * (1.0 - blend) + cpos1[0] * blend,
+            cpos0[1] * (1.0 - blend) + cpos1[1] * blend,
+            cpos0[2] * (1.0 - blend) + cpos1[2] * blend,
+        )
+        cheight = cheight0 * (1.0 - blend) + cheight1 * blend
 
-        # Camera wraps ~200° around the cluster over the sequence
-        t = i / max(middle_n - 1, 1)
         angle = math.pi / 5 + t * 1.1 * math.pi
-        dist = 3.5  # close pass — surrounded by crystals
-
-        cam_pos = (
+        dist = 8.0  # stand-off so crystals read against the cave, not fill the frame
+        spiral_samples.append((
             cpos[0] + math.cos(angle) * dist,
             max(fly_y, cpos[1] * 0.5 + fly_y + cheight * 0.15),
             cpos[2] + math.sin(angle) * dist,
-        )
-        look_target = _weighted_look_target(cam_pos, top_crystals, centre, look_radius)
-        keys.append((f, cam_pos, look_target))
+        ))
 
-    # Frame 960 — rising pull-back establishing shot
-    end_pos = (12.0, fly_y + 4.0, 5.0)
-    end_look = _weighted_look_target(end_pos, top_crystals, centre, look_radius)
-    keys.append((960, end_pos, end_look))
+    keys = []
+    for i in range(num_keyframes):
+        frame = int(round(i * total_frames / float(num_keyframes - 1)))
+        if i == 0:
+            cam_pos = start_pos
+        elif i == num_keyframes - 1:
+            cam_pos = end_pos
+        else:
+            cam_pos = spiral_samples[i - 1]
+        look_target = _weighted_look_target(
+            cam_pos, top_crystals, centre, look_radius)
+        keys.append((frame, cam_pos, look_target))
 
     keys.sort(key=lambda k: k[0])
     return keys
@@ -460,8 +475,10 @@ def _build_immersive_camera(anchors, root, rng, focal=24.0, fly_y=3.0,
     _safe_attr(cam + "Shape", "depthOfField", 1)
     _safe_attr(cam + "Shape", "focusDistance", 12)
     _safe_attr(cam + "Shape", "fStop", 3.2)
+    # Arnold exposure — lowered: with brighter key/rim and denser fog the
+    # cave no longer needs a heavy +3.0 lift, which had washed out contrast.
     try:
-        cmds.setAttr(cam + "Shape.ai_exposure", 3.0)
+        cmds.setAttr(cam + "Shape.ai_exposure", 1.5)
     except (RuntimeError, ValueError):
         pass
 
@@ -500,8 +517,8 @@ def _build_immersive_camera(anchors, root, rng, focal=24.0, fly_y=3.0,
     except (RuntimeError, ValueError):
         pass
 
-    cmds.playbackOptions(min=1, max=960, animationStartTime=1,
-                         animationEndTime=960)
+    cmds.playbackOptions(min=0, max=2400, animationStartTime=0,
+                         animationEndTime=2400)
     return cam, target
 
 
@@ -606,7 +623,7 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
 
     gems = []
     for color, name, glow, ior in gem_defs:
-        m = _material("CCV9_" + name + "_gem", color, transmission=.58,
+        m = _material("CCV9_" + name + "_gem", color, transmission=.72,
                        emission=.80, roughness=.14, ior=ior,
                        subsurface_color=glow)
         _add_cloudy_texture(m, glow)
@@ -681,39 +698,41 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
 
     # ── 3-layer lighting ─────────────────────────────────────────────
     cmds.progressWindow(edit=True, progress=6, status="Setting up lights + fog + dust...")
-    # Ambient dome (Arnold aiSkyDomeLight = much brighter than Maya ambientLight)
+    # Ambient dome — dimmed so shadow areas stay deep and the key/rim read.
     dome_lt = cmds.shadingNode("aiSkyDomeLight", asLight=True,
                                 name="CCV9_ambient")
     _safe_attr(dome_lt, "color", (0.04, 0.025, 0.06), "color")
-    _safe_attr(dome_lt, "intensity", 1.2)
+    _safe_attr(dome_lt, "intensity", 0.30)
 
-    # Key light: dramatic warm beam from cave entrance
+    # Key light: warm golden beam from the cave entrance, steep and deep
     key = cmds.directionalLight(name="CCV9_entrance_key")
-    _safe_attr(key, "color", (1.0, .78, .45), "color")
-    _safe_attr(key, "intensity", 120)
-    cmds.rotate(-45, -40, 0, key)
-    cmds.move(15, 20, 20, key)
+    _safe_attr(key, "color", (1.0, 0.75, 0.40), "color")
+    _safe_attr(key, "intensity", 180)
+    cmds.rotate(-55, -35, 0, key)
+    cmds.move(20, 18, 25, key)
 
-    # Rim light: cool blue back-glow for depth
+    # Rim light: cool blue back-glow outlining the crystals
     rim = cmds.directionalLight(name="CCV9_blue_rim")
-    _safe_attr(rim, "color", (.18, .25, .85), "color")
-    _safe_attr(rim, "intensity", 25)
+    _safe_attr(rim, "color", (0.15, 0.30, 1.0), "color")
+    _safe_attr(rim, "intensity", 40)
     cmds.rotate(25, 145, 0, rim)
 
-    # Crystal glow: bright point lights at each crystal, no decay
-    for i, (pos, color) in enumerate(anchors[:20]):
+    # Crystal glow: brighter point lights with linear decay so the glow stays
+    # local to each crystal instead of washing the whole cave.
+    for i, (pos, color, *_h) in enumerate(anchors[:20]):
         lt = cmds.pointLight(name="CCV9_glow_{:02d}".format(i))
         _safe_attr(lt, "color", color, "color")
-        _safe_attr(lt, "intensity", rng.uniform(800, 1600))
-        try: cmds.setAttr(lt + ".decayRate", 0)
-        except: pass
+        _safe_attr(lt, "intensity", rng.uniform(2000, 4000))
+        try: cmds.setAttr(lt + ".decayRate", 1)  # linear decay
+        except (RuntimeError, ValueError): pass
         cmds.move(pos[0], pos[1], pos[2], lt)
-    print("  lights: dome + key + rim + {} crystal glow".format(
+    print("  lights: dome + key + rim + {} crystal glow (linear decay)".format(
         min(len(anchors), 20)))
 
     # ── Volumetric fog ───────────────────────────────────────────────
     fog = cmds.createNode("aiAtmosphereVolume", name="CCV9_fog")
-    _safe_attr(fog, "density", fog_density)
+    fog_d = max(float(fog_density), 0.02)  # visible Tyndall beams
+    _safe_attr(fog, "density", fog_d)
     _safe_attr(fog, "color", (.032, .014, .075), "color")
     _safe_attr(fog, "attenuation", .65)
     _safe_attr(fog, "attenuationColor", (.012, .006, .035), "color")
@@ -724,16 +743,18 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
         pass
     except Exception:
         pass  # groundNormal/Point don't exist on all Arnold versions
-    print("  fog: aiAtmosphereVolume (density={})".format(fog_density))
+    print("  fog: aiAtmosphereVolume (density={})".format(fog_d))
 
     # ── Dust ─────────────────────────────────────────────────────────
-    dust_mat = _material("CCV9_dust", (1.0, .55, .20), emission=.40,
-                         roughness=.42)
+    # Pale, faint motes — read as suspended micro-dust caught in the light
+    # shafts, not glowing orange balls.
+    dust_mat = _material("CCV9_dust", (0.9, 0.85, 0.75), emission=.08,
+                         roughness=.35)
     dust_grp = cmds.group(empty=True, name="CCV9_dust", parent=root)
-    for i in range(120):
+    for i in range(200):
         mote = cmds.polySphere(
             name="CCV9_dust_{:03d}".format(i),
-            radius=rng.uniform(.012, .04), subdivisionsX=4, subdivisionsY=4,
+            radius=rng.uniform(.005, .018), subdivisionsX=4, subdivisionsY=4,
         )[0]
         cmds.move(rng.uniform(-22, 22), rng.uniform(-4, 14),
                   rng.uniform(-22, 22), mote)
@@ -746,8 +767,8 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
                                            focal=camera_focal,
                                            fly_y=fly_y,
                                            look_radius=look_radius)
-    print("  camera: {}mm, DOF f/3.2, 960-frame immersive fly-through "
-          "(travelling lookat)".format(camera_focal))
+    print("  camera: {}mm, DOF f/3.2, 2400-frame immersive fly-through "
+          "(30 keys, travelling lookat)".format(camera_focal))
 
     # ── Render settings ─────────────────────────────────────────────
     cmds.setAttr("defaultRenderGlobals.currentRenderer", "arnold",
@@ -788,7 +809,7 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
     ))
     print("  Diamond-Square terrain + sphere cave + growth animation")
     print("  Material: SSS + transmission + cloudy noise + 10 gem IORs")
-    print("  DOF camera 960f fly-through, fog + dust + 3-layer lights")
+    print("  DOF camera 2400f / 30-key fly-through, fog + dust + 3-layer lights")
     print("  Scene: {}".format(OUT_DIR + "/crystal_cavern_v9.ma"))
     if render:
         print("  Render: {}".format(rp + ".exr"))
