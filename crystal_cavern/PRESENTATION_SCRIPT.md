@@ -7,7 +7,7 @@
 
 **Title**: Crystal Cavern — A Procedural Crystal Cave Generator
 **Subtitle**: Maya Python Scripting for Animation
-**Name**: [Your Name]
+**Name**: 贺想容
 **Course**: Innovation Design for Future, ZJU, 2026
 
 **Say**: "Good afternoon everyone. My project is Crystal Cavern — a procedural crystal cave generator built entirely in Maya Python. I work alone on this project."

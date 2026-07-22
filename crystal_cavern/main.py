@@ -17,7 +17,7 @@ Pipeline:
 5. Cave enclosure (walls + ceiling)
 6. Fly-through camera animation (960 frames)
 
-Author: [Your Name]
+Author: 贺想容
 Course: Innovation Design for Future, Zhejiang University, 2026
 Instructor: Prof Xiaosong Yang
 """
