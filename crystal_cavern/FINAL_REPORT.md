@@ -38,7 +38,9 @@ cave_y = h * (1.0 - dist) - wall_height * dist ** 1.5 + \
 
 ### 4. Subsurface Scattering 照明模型 (Jensen et al., 2001)
 
-**创新点**：用**程序化点光源网络**模拟次表面散射效果——20 盏彩色点光源精确放置在最高大晶体的锚点位置，灯光颜色匹配每种宝石的辉光色，衰减距离为二次方。配合 Arnold 的 transmission + subsurface + coat 材质三重渲染，产生「光从晶体内部透出」的视觉效果。
+**算法本体**：次表面散射由 Arnold `aiStandardSurface` 的 `subsurface` 属性族实现——这是一套遵循 Jensen et al. (2001) 的 BSSRDF，光在晶体内部扩散后以宝石辉光色透出。每个宝石材质经 transmission + subsurface + coat 三重渲染，产生「光从晶体内部透出」的视觉效果。
+
+**外观补光（非算法本体）**：另设 20 盏彩色点光源精确放置在最高大晶体的锚点位置，灯光颜色匹配每种宝石辉光色、衰减为二次方，作为晶体外部的外光补光，强化「自发光」观感。点光网络是外观补光，不是 SSS 算法——SSS 由材质端 BSSRDF 完成。
 
 ---
 

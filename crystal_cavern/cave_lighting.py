@@ -9,8 +9,16 @@ Improvements over v1:
 - Dust particles with gentle floating animation curves
 - Cinematic spiral camera that flies close to crystal clusters
 
-References:
+References / scope note:
 - Jensen, H. W. et al. (2001). A practical model for subsurface light transport.
+  NOTE: the subsurface scattering itself is implemented in crystal_growth.py via
+  Arnold's aiStandardSurface `subsurface` family of attributes (an industrial
+  BSSRDF following Jensen et al.). The point-light network in THIS module is
+  *not* an SSS algorithm — it is emissive accent illumination placed at crystal
+  anchors to enhance the subsurface *appearance* (glow-from-within look). Keeping
+  the two concerns separate is intentional: BSSRDF handles light transport inside
+  the crystal; the accent lights handle exterior fill so crystals read as
+  self-luminous against the dark cavern.
 """
 
 import maya.cmds as cmds
@@ -74,7 +82,10 @@ def setup_lighting(crystal_count=30, light_anchors=None):
 def _place_crystal_lights(light_anchors):
     """Place point lights at actual crystal positions with matching colors.
 
-    Samples up to 20 anchors for performance, prioritizing the tallest crystals.
+    This is emissive accent illumination, *not* subsurface scattering. The SSS
+    look is produced by Arnold's BSSRDF in crystal_growth.py; these point lights
+    are exterior fill that makes each crystal read as self-luminous. Samples up
+    to 20 anchors for performance, prioritizing the tallest crystals.
     """
     # Sort by height (use anchor Y as proxy) to light the most prominent crystals
     sorted_anchors = sorted(light_anchors, key=lambda a: a[0][1], reverse=True)

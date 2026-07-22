@@ -56,16 +56,47 @@ def create_cave_terrain(width=50, depth=50, subdivisions=256, seed=2026,
                               subdivisionsHeight=subdivisions,
                               axis=[0, 1, 0])[0]
 
+    # ── Compute the cave-shaping target position for every vertex in pure
+    # Python first, then write the whole mesh in ONE API call via OpenMaya2's
+    # MFnMesh.setPoints. This replaces ~66,000 per-vertex cmds.move() calls
+    # (the dominant cost of terrain generation) with a single batch write.
+    # Falls back to the legacy per-vertex loop if OpenMaya2 is unavailable
+    # or the mesh shape lookup fails — guaranteeing the result is identical.
+    target_positions = []
     for i in range(size):
         for j in range(size):
-            vtx = terrain + ".vtx[" + str(i * size + j) + "]"
             h = hm[i][j]
             cx = (i / subdivisions - 0.5) * width
             cz = (j / subdivisions - 0.5) * depth
             dist = math.sqrt(cx*cx + cz*cz) / (depth * 0.5)
             cave_y = h * (1.0 - dist) - wall_height * dist ** 1.5 + \
                      math.sin(cx * 0.3) * math.cos(cz * 0.3) * 2.0
-            cmds.move(cx, cave_y, cz, vtx, relative=False, worldSpace=True)
+            target_positions.append((cx, cave_y, cz))
+
+    batch_applied = False
+    try:
+        from maya.api import OpenMaya as om
+        sel = om.MSelectionList()
+        sel.add(terrain)
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn_mesh = om.MFnMesh(dag)
+        new_pts = om.MPointArray()
+        new_pts.setLength(len(target_positions))
+        for idx, (px, py, pz) in enumerate(target_positions):
+            new_pts.set(idx, om.MPoint(px, py, pz))
+        fn_mesh.setPoints(new_pts, om.MSpace.kWorld)
+        batch_applied = True
+    except Exception as exc:
+        print("   Batch vertex write failed (%s) — falling back to per-vertex move" % exc)
+
+    if not batch_applied:
+        for i in range(size):
+            for j in range(size):
+                idx = i * size + j
+                px, py, pz = target_positions[idx]
+                vtx = terrain + ".vtx[" + str(idx) + "]"
+                cmds.move(px, py, pz, vtx, relative=False, worldSpace=True)
 
     cmds.polyNormal(terrain, normalMode=2, userNormalMode=0, ch=1)
     cmds.polySoftEdge(terrain, angle=45, constructionHistory=1)

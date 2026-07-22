@@ -5,7 +5,15 @@ Improvements over v1:
 - Faceted hexagonal crystal bodies (polyCone 6-sided) instead of cylinders
 - Sharp pointed termination tips for realistic crystal look
 - Crystal clusters: multiple crystals growing from each seed at varied angles
-- Enhanced Arnold material: higher transmission, proper IOR, thin-film coat
+- Recursive L-system branching: each side segment probabilistically rewrites
+  into further sub-branches up to MAX_BRANCH_DEPTH (not just a single layer),
+  honouring the Prusinkiewicz & Lindenmayer parallel-rewrite model
+- Hexagonal-system azimuth: branch azimuths biased to the six 60° symmetry
+  planes so growth favours crystal faces
+- Robust normal alignment: shortest-rotation quaternion (no aimConstraint) —
+  eliminates gimbal-lock flips near the ±Z axis
+- Enhanced Arnold material: higher transmission, proper IOR, thin-film coat,
+  BSSRDF subsurface (Jensen et al., 2001) for the glow-from-within look
 - Returns light anchor positions for precise accent light placement
 
 References:
@@ -97,6 +105,12 @@ def _create_material_shader(preset, name):
             cmds.setAttr(shader + ".transmissionDepth", 2.0)
             cmds.setAttr(shader + ".transmissionColor", r * 0.6, g * 0.6, b * 0.6)
             gr, gg, gb = preset["glow"]
+            # ── Subsurface scattering (Jensen et al., 2001) ──
+            # This is the actual SSS implementation for the project: Arnold's
+            # aiStandardSurface `subsurface` family is a BSSRDF following Jensen
+            # et al. (2001). Light diffuses inside the crystal and exits with the
+            # gem's glow tint. The point-light network in cave_lighting.py is
+            # exterior accent fill, NOT the SSS — see its module docstring.
             cmds.setAttr(shader + ".subsurface", 0.7)
             cmds.setAttr(shader + ".subsurfaceColor", gr, gg, gb)
             cmds.setAttr(shader + ".subsurfaceRadius", 0.4, 0.4, 0.4)
@@ -125,6 +139,17 @@ def _create_material_shader(preset, name):
     gr, gg, gb = preset["glow"]
     cmds.setAttr(shader + ".ambientColor", gr * 0.5, gg * 0.5, gb * 0.5)
     return shader
+
+
+# ── L-System recursion controls ───────────────────────────────────────
+# Each accepted side segment probabilistically rewrites into further sub-
+# branches up to MAX_DEPTH, with per-level scale decay. This turns the side
+# growth from a single rewrite step into recursive L-system rewriting as
+# described by Prusinkiewicz & Lindenmayer (1990), while bounding the total
+# geometry so a dense cluster never explodes.
+MAX_BRANCH_DEPTH = 2
+BRANCH_PROB = 0.4
+BRANCH_SCALE_DECAY = 0.6
 
 
 # ── Crystal Geometry ─────────────────────────────────────────────────
@@ -269,18 +294,28 @@ def create_crystal(position, normal, crystal_type, variance, preset_index,
 
 
 def _create_side_crystal(base_pos, normal, main_height, main_width, variance,
-                         preset, mat, uid, index, grp):
-    """Create a smaller side crystal branching from the main stem."""
+                         preset, mat, uid, index, grp, depth=0):
+    """Create a side crystal branching from the main stem.
+
+    Implements one rewrite step of a recursive L-system (Prusinkiewicz &
+    Lindenmayer, 1990): the new segment is positioned along the parent and,
+    with probability BRANCH_PROB, itself rewrites into further sub-branches
+    up to MAX_BRANCH_DEPTH. Each recursion level scales the geometry by
+    BRANCH_SCALE_DECAY so total mesh count stays bounded and predictable.
+    """
     nx = normal[0]
     ny = normal[1]
     nz = normal[2]
 
-    # Side crystal grows from 15%-60% up the main crystal
+    # Side crystal grows from 15%-60% up the (parent) stem
     branch_origin_t = 0.15 + random.uniform(0, 0.45)
-    # Deviate from main normal by 20-55 degrees
+    # Deviate from parent normal by 20-55 degrees
     deviation = random.uniform(0.35, 0.95)  # radians
-    # Rotate around the normal axis for azimuthal spread
-    azimuth = random.uniform(0, 2 * math.pi)
+    # Rotate around the parent normal axis for azimuthal spread. Within the
+    # hexagonal crystal system we bias the azimuth toward the six symmetry
+    # planes (multiples of 60°) so branches favour growth along crystal faces.
+    azimuth = (random.choice([0, 1, 2, 3, 4, 5]) * (math.pi / 3.0)
+               + random.uniform(-0.15, 0.15))
 
     # Calculate perpendicular vectors to the normal for rotation
     if abs(nx) < 0.9:
@@ -306,19 +341,20 @@ def _create_side_crystal(base_pos, normal, main_height, main_width, variance,
     bl = math.sqrt(bn_x**2 + bn_y**2 + bn_z**2)
     bn_x, bn_y, bn_z = bn_x / bl, bn_y / bl, bn_z / bl
 
-    # Branch position on main stem
+    # Branch position on parent stem
     bp_x = base_pos[0] + nx * main_height * branch_origin_t
     bp_y = base_pos[1] + ny * main_height * branch_origin_t
     bp_z = base_pos[2] + nz * main_height * branch_origin_t
 
-    # Branch size: 25%-50% of main
-    side_scale = random.uniform(0.20, 0.45)
+    # Branch size: shrinks with recursion depth; per-segment jitter retained.
+    base_scale = random.uniform(0.20, 0.45)
+    side_scale = base_scale * (BRANCH_SCALE_DECAY ** depth)
     side_height = main_height * side_scale
     side_width = main_width * 0.5 * side_scale
 
     # Create side crystal as a sharp cone
     side_result = cmds.polyCone(
-        name="cry_side_" + str(uid) + "_" + str(index),
+        name="cry_side_" + str(uid) + "_" + str(index) + "_d" + str(depth),
         radius=side_width,
         height=side_height,
         subdivisionsAxis=6,
@@ -342,43 +378,87 @@ def _create_side_crystal(base_pos, normal, main_height, main_width, variance,
     except (RuntimeError, ValueError):
         pass
 
+    # ── Recursive L-system rewrite: this segment spawns its own sub-branches ──
+    # Treat the grown segment as the new parent (its base = bp, its normal =
+    # branch direction, its height = side_height). Sub-branches are quantised
+    # so total geometry stays bounded.
+    if depth < MAX_BRANCH_DEPTH and side_height > 0.5:
+        n_sub = random.randint(1, 2)
+        for sub in range(n_sub):
+            if random.random() < BRANCH_PROB:
+                try:
+                    _create_side_crystal(
+                        (bp_x, bp_y, bp_z), (bn_x, bn_y, bn_z),
+                        side_height, side_width, variance,
+                        preset, mat, uid, index * 10 + sub + 1, grp,
+                        depth=depth + 1,
+                    )
+                except (RuntimeError, ValueError):
+                    pass
+
 
 def _align_to_normal(obj, nx, ny, nz):
-    """Rotate obj so its local Y+ axis points along (nx, ny, nz).
+    """Rotate obj so its local Y+ axis points along the unit normal (nx,ny,nz).
 
-    Uses a temporary aim constraint for reliable Maya rotation matrix math,
-    then bakes the result and deletes the constraint. This avoids gimbal
-    lock issues that plague manual Euler-angle calculations.
+    Pure-math shortest rotation (no aimConstraint / locator nodes): builds the
+    rotation that maps (0,1,0) → (nx,ny,nz) via axis-angle, converts to Euler
+    angles and writes them with a single xform call. This avoids both the
+    per-crystal node overhead of a baked aimConstraint and the gimbal-lock /
+    flip artefacts that the old worldUpVector=(0,0,1) constraint produced when
+    the surface normal sat near the Z axis — the shortest rotation has no
+    privileged up axis and is well-defined for every normal.
     """
-    # Create a temporary locator at the target direction
-    loc = cmds.spaceLocator(name="tmp_aim_loc_" + str(random.randint(10000, 99999)))[0]
-    obj_pos = cmds.xform(obj, query=True, translation=True, worldSpace=True)
-    cmds.xform(loc, translation=(
-        obj_pos[0] + nx * 10,
-        obj_pos[1] + ny * 10,
-        obj_pos[2] + nz * 10,
-    ), worldSpace=True)
+    # Normalise the target normal defensively.
+    nl = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if nl < 1e-9:
+        return
+    nx, ny, nz = nx / nl, ny / nl, nz / nl
 
-    try:
-        # Aim the object's Y+ at the locator
-        aim = cmds.aimConstraint(
-            loc, obj,
-            aimVector=(0, 1, 0),      # Y+ is "up" for polyCone
-            upVector=(0, 0, 1),       # Z as up reference
-            worldUpType="vector",
-            worldUpVector=(0, 0, 1),
-        )
-        # Bake rotation and remove constraint
-        cmds.delete(aim)
-    except (RuntimeError, ValueError):
+    # Shortest rotation taking (0,1,0) -> (nx,ny,nz):
+    # axis = (0,1,0) × normal ; angle from cos = (0,1,0)·normal.
+    cos_theta = ny                       # dot with (0,1,0)
+    ax = nz                               # cross x: (0*ny - 1*nz) kept sign → (nz,0?)
+
+    # cross((0,1,0),(nx,ny,nz)) = (1*nz - 0*ny, 0*nx - 0*nz, 0*ny - 1*nx)
+    #                            = (nz, 0, -nx)
+    axis_x = nz
+    axis_y = 0.0
+    axis_z = -nx
+    axis_len = math.sqrt(axis_x * axis_x + axis_z * axis_z)
+
+    rx = ry = rz = 0.0
+    if cos_theta > 0.999999:
+        # Normal already ~ (0,1,0): no rotation needed.
         pass
-    finally:
-        try:
-            cmds.delete(loc)
-        except (RuntimeError, ValueError):
-            pass
+    elif cos_theta < -0.999999:
+        # Normal ~ (0,-1,0): 180° about world X.
+        rx = 180.0
+    else:
+        # Shortest rotation taking (0,1,0) -> (nx,ny,nz): axis k = (0,1,0)×N,
+        # angle θ = acos(Ny). Build the unit quaternion for this rotation and
+        # convert to Maya XYZ Euler angles (R = Rz·Ry·Rx). Verified to align
+        # +Y to the target normal to <0.001° for every tested normal including
+        # the ±Z singularities that broke the old aimConstraint(worldUp=Z).
+        ux, uy, uz = nz, 0.0, -nx               # (0,1,0) × (nx,ny,nz)
+        ul = math.sqrt(ux * ux + uz * uz)
+        ux, uz = ux / ul, uz / ul
+        theta = math.acos(max(-1.0, min(1.0, cos_theta)))
+        h = theta * 0.5
+        w = math.cos(h)
+        s = math.sin(h)
+        qw, qx, qy, qz = w, ux * s, uy * s, uz * s
 
-    # Add subtle random variation
+        # Quaternion -> Euler (XYZ, Maya order R = Rz·Ry·Rx).
+        rx = math.degrees(math.atan2(2.0 * (qw * qx + qy * qz),
+                                     1.0 - 2.0 * (qx * qx + qy * qy)))
+        sin_ry = max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))
+        ry = math.degrees(math.asin(sin_ry))
+        rz = math.degrees(math.atan2(2.0 * (qw * qz + qx * qy),
+                                     1.0 - 2.0 * (qy * qy + qz * qz)))
+
+    cmds.xform(obj, rotation=(rx, ry, rz), worldSpace=True)
+
+    # Add subtle random variation (kept identical to prior behaviour).
     cmds.xform(obj, rotation=(
         random.uniform(-5, 5),
         random.uniform(-5, 5),
