@@ -478,7 +478,7 @@ def _build_immersive_camera(anchors, root, rng, focal=24.0, fly_y=3.0,
     # Arnold exposure — lowered: with brighter key/rim and denser fog the
     # cave no longer needs a heavy +3.0 lift, which had washed out contrast.
     try:
-        cmds.setAttr(cam + "Shape.ai_exposure", 1.5)
+        cmds.setAttr(cam + "Shape.ai_exposure", 6.0)
     except (RuntimeError, ValueError):
         pass
 
@@ -702,7 +702,7 @@ def build(seed=20260721, density=56, fog_density=0.008, render=True,
     dome_lt = cmds.shadingNode("aiSkyDomeLight", asLight=True,
                                 name="CCV9_ambient")
     _safe_attr(dome_lt, "color", (0.04, 0.025, 0.06), "color")
-    _safe_attr(dome_lt, "intensity", 0.30)
+    _safe_attr(dome_lt, "intensity", 1.0)
 
     # Key light: warm golden beam from the cave entrance, steep and deep
     key = cmds.directionalLight(name="CCV9_entrance_key")
