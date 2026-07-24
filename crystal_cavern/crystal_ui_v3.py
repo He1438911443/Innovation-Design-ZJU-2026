@@ -390,7 +390,7 @@ def _render_still():
 # ── Core: Generate from UI ──────────────────────────────────────────
 
 def generate_from_ui():
-    """Read all UI parameters and call final_scene.build()."""
+    """Read UI parameters and build the tunnel-first Crystal Cavern v10."""
     # Read parameters
     terrain_seed      = _qry_int("terrain_seed", 2026)
     terrain_roughness = _qry_float("terrain_roughness", 0.45)
@@ -420,9 +420,9 @@ def generate_from_ui():
         _s.path.insert(0, _MODULE_DIR)
 
     try:
-        if 'final_scene' in _s.modules:
-            del _s.modules['final_scene']
-        import final_scene
+        if 'tunnel_cavern' in _s.modules:
+            del _s.modules['tunnel_cavern']
+        import tunnel_cavern
         import maya.cmds as cmds
 
         # Clean existing scene
@@ -439,10 +439,10 @@ def generate_from_ui():
                 except: pass
 
         # Build
-        _set_status("Building cave (8 stages)...")
+        _set_status("Building tunnel graph + recursive crystal clusters...")
         _set_progress(15)
 
-        cam = final_scene.build(
+        cam = tunnel_cavern.build(
             seed=terrain_seed,
             density=int(15 + crystal_density * 22),
             fog_density=fog_density,
@@ -455,7 +455,7 @@ def generate_from_ui():
 
         cmds.confirmDialog(
             title="Generation Complete / 生成完成",
-            message="Scene built with v3 algorithms.\nRecursive L-system + True Bridson Poisson-disc + Immersive Camera\n\nOpen Arnold Render View to render.",
+            message="Scene built with v10 tunnel algorithms.\nTunnel graph + wall-seeded recursive L-system + path camera\n\nOpen Arnold Render View to render.",
             button=["OK"],
             defaultButton="OK",
         )

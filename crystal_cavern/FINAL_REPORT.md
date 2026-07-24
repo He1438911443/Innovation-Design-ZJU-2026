@@ -4,7 +4,7 @@
 
 Crystal Cavern 是一个**用 Python 完全驱动的 Maya 程序化生成系统**——一键生成完整的水晶洞穴三维场景和飞越动画。不需要任何手动建模或手动布光。
 
-核心能力：运行一段 Python 脚本，Maya 自动完成地形生成、晶体生长、灯光布置、体积雾效、洞穴围合、钟乳石生成、相机动画——全部参数化可控。
+核心能力：运行一段 Python 脚本，Maya 自动完成**隧道图生成、洞壁网格扫掠、递归晶簇生长、灯光布置与路径相机动画**——全部参数化可控。v10 不再把洞穴理解为开阔地形，而是从可漫游的中心线路径生成真实洞道；同一条路径同时控制洞体、晶体播种和飞越。
 
 项目独立开发于 2026 年 7 月，作为浙江大学「未来创新设计」课程作品（指导教师：Prof. Xiaosong Yang）。
 
@@ -14,7 +14,17 @@ Crystal Cavern 是一个**用 Python 完全驱动的 Maya 程序化生成系统*
 
 本项目不是简单的几何体随机摆放。每个阶段都实现了已发表的计算机图形学算法，并对 Maya 环境做了适配创新：
 
-### 1. Diamond-Square 地形生成 (Fournier, Fussell & Carpenter, 1982)
+### 1. Tunnel Graph + Ring Sweep 洞穴生成（v10）
+
+**核心改进**：早期版本把 Diamond-Square 高度图塑造成盆地，适合地形但不能形成参考图中的洞穴通道。v10 以随机种子生成一条主通道、一个腔室和一条支洞组成的中心线图；沿中心线建立带噪声的 12 边截面环，并连接成向内可见的 tube mesh。相机轨迹直接复用主通道，因此不会绕着地形飞行或看向空区。
+
+```python
+graph = tunnel_graph(seed)                 # main route + chamber + branch
+tunnel, wall_samples = _create_tube(... ) # irregular ring sweep
+camera = _camera(graph["main"], root)      # identical route for fly-through
+```
+
+### 2. Diamond-Square 地形生成 (Fournier, Fussell & Carpenter, 1982)
 
 **创新点**：传统 Diamond-Square 生成平面高度图后，我们增加了一个**洞穴塑造函数**——用径向距离的幂函数压低边缘形成碗状盆地，叠加正弦波扰动模拟天然洞穴的不规则起伏。最终在 257×257 细分平面上产生 66,049 个顶点的高分辨率地形。
 
@@ -24,19 +34,20 @@ cave_y = h * (1.0 - dist) - wall_height * dist ** 1.5 + \
          sin(cx * 0.3) * cos(cz * 0.3) * 2.0
 ```
 
-### 2. Poisson-disc 采样种子分布 (Bridson, 2007)
+### 3. Poisson-disc / 洞壁采样种子分布 (Bridson, 2007)
 
 **创新点**：标准 Poisson-disc 在高密度顶点集上性能极差。我们采用**贪婪洗牌近似算法**——先随机排列顶点列表，遍历时仅检查已选中种子的距离，O(n·k) 复杂度且结果视觉上与完整 Poisson-disc 不可区分。
 
-### 3. L-System 启发晶体生长 (Prusinkiewicz & Lindenmayer, 1990)
+### 4. 可见递归 L-System 晶体生长 (Prusinkiewicz & Lindenmayer, 1990)
 
 **创新点**：传统 L-System 生长用线段推演，难以直接映射到三维 mesh。我们设计了**混合几何生成方案**：
 - **六边形 polyCone** 替代圆柱体——天然水晶的六方晶系结构
 - **aimConstraint 旋转**替代手动欧拉角——避免 gimbal lock，所有晶体精确沿面法线生长
+- **显式重写规则**——v10 每个洞壁晶簇执行 `F → F[+F][-F]` 两次；一根主晶、两根一级侧晶与四根二级小晶在画面中可直接辨认，而不是仅在代码中存在随机 spike
 - **球面坐标随机分支**——侧生晶体在 3D 球面上的随机方位角和仰角分布，模拟天然晶簇的不规则性
 - **根部嵌入**——晶体底部沿法线嵌入地形 12%，消除悬浮感；底部环顶点 1.3× 径向扩展模拟「从岩石中长出」的效果
 
-### 4. Subsurface Scattering 照明模型 (Jensen et al., 2001)
+### 5. Subsurface Scattering 照明模型 (Jensen et al., 2001)
 
 **算法本体**：次表面散射由 Arnold `aiStandardSurface` 的 `subsurface` 属性族实现——这是一套遵循 Jensen et al. (2001) 的 BSSRDF，光在晶体内部扩散后以宝石辉光色透出。每个宝石材质经 transmission + subsurface + coat 三重渲染，产生「光从晶体内部透出」的视觉效果。
 

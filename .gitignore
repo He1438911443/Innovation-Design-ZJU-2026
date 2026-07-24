@@ -5,6 +5,7 @@ __pycache__/
 .~*
 ~*
 .dcc-mcp/
+*.pptx.inspect.ndjson
 pre-ppt/Group 3-Implementation of CS2.pptx
 pre-ppt/Group 7- Zombie Apocalypse City.pptx
 pre-ppt/G4 smoke flow Pre-production presentation (final).pptx
